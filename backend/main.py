@@ -23,7 +23,7 @@ from models import OccupancySnapshot
 # TODO hardcoded default global variables for now
 
 VIDEO_SOURCE = os.getenv("VIDEO_SOURCE", "../assets/test3.mp4")   
-LOT_CAPACITY = int(os.getenv("LOT_CAPACITY", "50"))
+LOT_CAPACITY = int(os.getenv("LOT_CAPACITY", "41"))
 YOLO_MODEL   = os.getenv("YOLO_MODEL", "yolov8n.pt")
 SPOTS_FILE   = os.getenv("SPOTS_FILE", "../assets/spots.json")               
 

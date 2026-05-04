@@ -97,7 +97,6 @@ class CameraWorker:
 
     def _run(self):
 
-        
         while self._running:
             cap = cv2.VideoCapture(self.source)
             if not cap.isOpened():
@@ -130,10 +129,22 @@ class CameraWorker:
                 if cv2.waitKey(1) & 0xFF == ord("q"):
                     self._running = False
 
+                # Derive occupied/available from spot states
+                spot_statuses = [
+                    SpotStatus(
+                        id=s.spot_id,
+                        label=s.spot_id,
+                        level="1",
+                        status="occupied" if s.is_occupied else "available",
+                        confidence=1.0,
+                    )
+                    for s in result.spots
+                ]
 
-                # status=compute_facility_status(result.occupancy_pct),
+                total = len(spot_statuses)
+                occupied_count = sum(1 for s in spot_statuses if s.status == "occupied")
+                available_count = total - occupied_count
 
-                # Build snapshot
                 snapshot = OccupancySnapshot(
                     lot_id="lot_1",
                     lot_slug="lot-1",
@@ -141,23 +152,13 @@ class CameraWorker:
                     location="123 Main St",
                     facility_status=compute_facility_status(result.occupancy_pct),
                     timestamp=datetime.now(timezone.utc),
-                    capacity=self.capacity,
-                    available=max(self.capacity - result.smoothed_count, 0),
-                    occupied=result.smoothed_count,
+                    capacity=total,
+                    available=available_count,
+                    occupied=occupied_count,
                     unknown=0,
-                    occupancy_pct=round(result.occupancy_pct, 3),
-                    spots=[
-                        SpotStatus(
-                            id=s.spot_id,
-                            label=s.spot_id,
-                            level="1",
-                            status="occupied" if s.is_occupied else "available",
-                            confidence=1.0,
-                        )
-                        for s in result.spots
-                    ],
+                    occupancy_pct=round(occupied_count / total, 3) if total > 0 else 0.0,
+                    spots=spot_statuses,
                 )
-
                 # Write snapshot (thread-safe)
                 with self._lock:
                     self._snapshot = snapshot
