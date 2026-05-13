@@ -1,5 +1,4 @@
 import { Link, useParams } from "react-router-dom";
-import { DirectionsButton } from "../components/DirectionsButton";
 import { PoweredBySwiftPark } from "../components/PoweredBySwiftPark";
 import { StatusBadge } from "../components/StatusBadge";
 import { parseFacilitySlug } from "../lib/api";
@@ -13,7 +12,8 @@ export function SpotDetailsPage() {
   const { occupancy, loading } = useFacilityOccupancy(facilitySlug);
 
   if (!facilitySlug) return <DetailsMessage title="Facility not found" />;
-  if (loading || !occupancy) return <DetailsMessage title="Loading spot details" loading />;
+  if (loading || !occupancy)
+    return <DetailsMessage title="Loading spot details" loading />;
 
   const spot = findSpot(occupancy, spotId);
   const section = findSectionForSpot(occupancy, spot);
@@ -23,7 +23,7 @@ export function SpotDetailsPage() {
       <main className="page-stack">
         <section className="content-card center-card">
           <h1>Spot not found</h1>
-          <p>That spot is not available in the current SwiftPark view.</p>
+          <p>That spot isn't in the current SwiftPark view.</p>
           <Link className="primary-button" to={`/f/${facilitySlug}/map`}>
             View Spot Map
           </Link>
@@ -32,10 +32,16 @@ export function SpotDetailsPage() {
     );
   }
 
+  const isAvailable = spot.status === "available";
+
   return (
     <main className="page-stack">
       <header className="compact-page-header">
-        <Link to={`/f/${facilitySlug}/map?spot=${encodeURIComponent(spot.label)}`} className="back-link">
+        <Link
+          to={`/f/${facilitySlug}/map?spot=${encodeURIComponent(spot.label)}`}
+          className="back-link"
+          aria-label="Back to spot map"
+        >
           Back
         </Link>
         <div>
@@ -48,12 +54,12 @@ export function SpotDetailsPage() {
         <div className="large-spot-badge">{spot.label}</div>
         <div>
           <p className="eyebrow">{section.label}</p>
-          <h2>{spot.status === "available" ? "Ready to park" : "Current spot status"}</h2>
-          <StatusBadge status={spot.status === "available" ? "open" : "busy"} />
+          <h2>{isAvailable ? "Ready to park" : "Spot status"}</h2>
+          <StatusBadge status={isAvailable ? "open" : "busy"} />
         </div>
         <p>
-          SwiftPark will hand you off to maps for the facility entrance, then guide the final
-          parking step on site.
+          SwiftPark hands off to Maps for the facility entrance, then guides the
+          final parking step on site.
         </p>
       </section>
 
@@ -66,15 +72,22 @@ export function SpotDetailsPage() {
           <strong>{section.label}</strong>
           <span>Status</span>
           <strong>{spot.status}</strong>
+          <span>Source</span>
+          <strong>{section.sourceLabel}</strong>
         </div>
       </section>
 
-      <DirectionsButton facilitySlug={facilitySlug} label="Navigate to Entrance" />
-      <Link className="secondary-button full-width" to={buildSpotRoute(facilitySlug, "parked", spot)}>
-        Confirm Parked
-      </Link>
-      <Link className="primary-button full-width" to={buildSpotRoute(facilitySlug, "navigate", spot)}>
+      <Link
+        className="primary-button full-width"
+        to={buildSpotRoute(facilitySlug, "navigate", spot)}
+      >
         Navigate to Spot
+      </Link>
+      <Link
+        className="secondary-button full-width"
+        to={buildSpotRoute(facilitySlug, "parked", spot)}
+      >
+        Confirm Parked
       </Link>
 
       <PoweredBySwiftPark />
@@ -82,7 +95,13 @@ export function SpotDetailsPage() {
   );
 }
 
-function DetailsMessage({ title, loading = false }: { title: string; loading?: boolean }) {
+function DetailsMessage({
+  title,
+  loading = false,
+}: {
+  title: string;
+  loading?: boolean;
+}) {
   return (
     <main className="page-stack loading-page">
       {loading ? <div className="loading-ring" /> : null}
@@ -90,4 +109,3 @@ function DetailsMessage({ title, loading = false }: { title: string; loading?: b
     </main>
   );
 }
-

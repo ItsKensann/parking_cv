@@ -22,6 +22,7 @@ export function ParkedPage() {
         <div className="confetti confetti-one" />
         <div className="confetti confetti-two" />
         <div className="confetti confetti-three" />
+        <div className="confetti confetti-four" />
         <div className="check-badge" aria-hidden="true" />
         <p className="eyebrow">Parking confirmed</p>
         <h1>You're Parked</h1>
