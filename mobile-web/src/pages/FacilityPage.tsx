@@ -1,7 +1,6 @@
 import { Link, useParams } from "react-router-dom";
 import { FacilityHeader } from "../components/FacilityHeader";
 import { PoweredBySwiftPark } from "../components/PoweredBySwiftPark";
-import { RecommendationCard } from "../components/RecommendationCard";
 import { ZoneCard } from "../components/ZoneCard";
 import { parseFacilitySlug } from "../lib/api";
 import { getRecommendation } from "../lib/recommendations";
@@ -14,34 +13,20 @@ export function FacilityPage() {
   const { occupancy, loading } = useFacilityOccupancy(facilitySlug);
 
   if (!facilitySlug) return <UnknownFacility />;
-  if (loading || !occupancy) return <LoadingPage label="Loading parking availability" />;
+  if (loading || !occupancy)
+    return <LoadingPage label="Loading parking availability" />;
 
   const recommendation = getRecommendation(occupancy);
   const recommendedSpot = firstAvailableSpot(recommendation?.section);
 
   return (
     <main className="page-stack">
-      <FacilityHeader occupancy={occupancy} />
-      <RecommendationCard
+      <FacilityHeader
+        occupancy={occupancy}
         facilitySlug={facilitySlug}
         recommendation={recommendation}
         selectedSpot={recommendedSpot}
       />
-
-      <section className="summary-card">
-        <div>
-          <span>Available</span>
-          <strong>{occupancy.available}</strong>
-        </div>
-        <div>
-          <span>Occupied</span>
-          <strong>{occupancy.occupied}</strong>
-        </div>
-        <div>
-          <span>{occupancy.facility.type === "surface_lot" ? "Mapped" : "Capacity"}</span>
-          <strong>{occupancy.capacity}</strong>
-        </div>
-      </section>
 
       <section className="content-card">
         <div className="section-heading-row">

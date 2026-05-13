@@ -1,5 +1,6 @@
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { DirectionsButton } from "../components/DirectionsButton";
+import { MapPreview } from "../components/MapPreview";
 import { PoweredBySwiftPark } from "../components/PoweredBySwiftPark";
 import { parseFacilitySlug } from "../lib/api";
 import { buildFinalGuidance, buildSpotRoute } from "../lib/navigation";
@@ -32,9 +33,11 @@ export function NavigationPage() {
         </Link>
         <div>
           <p className="eyebrow">{occupancy.facility.publicName}</p>
-          <h1>Navigate to Parking</h1>
+          <h1>Navigate to parking</h1>
         </div>
       </header>
+
+      <MapPreview occupancy={occupancy} />
 
       <section className="content-card route-preview-card">
         <span className="step-pill">
