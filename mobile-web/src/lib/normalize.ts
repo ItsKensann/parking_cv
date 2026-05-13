@@ -266,9 +266,7 @@ function buildBrightonZoneOneSection(
     status: statusFromAvailable(spotCounts.available, capacity, occupancyPct),
     source,
     sourceLabel:
-      source === "live"
-        ? `Live camera · ${spots.length} mapped spaces`
-        : `Fallback camera data · ${spots.length} mapped spaces`,
+      source === "live" ? "Live camera data" : "Latest available data",
     spots,
   };
 }
@@ -454,16 +452,19 @@ export function getFacilitySummaryFromSections(sections: ParkingSection[]) {
   };
 }
 
-function sourceLabelForSection(source: SectionDataSource, mappedSpaces: number): string {
+function sourceLabelForSection(source: SectionDataSource, _mappedSpaces: number): string {
+  // Public-facing zone/level cards keep the source label short and
+  // jargon-free. The numeric count is already shown beside this label
+  // ("X open" / progress bar), so we don't repeat capacity counts here.
   switch (source) {
     case "live":
-      return `Live camera · ${mappedSpaces} mapped spaces`;
+      return "Live camera data";
     case "backend_mock":
-      return `Facility data · ${mappedSpaces} spaces`;
+      return "Latest zone data";
     case "demo":
-      return `Facility data · ${mappedSpaces} spaces`;
+      return "Live facility data";
     case "fallback":
-      return `Fallback data · ${mappedSpaces} spaces`;
+      return "Latest available data";
   }
 }
 

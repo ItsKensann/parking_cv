@@ -3,9 +3,23 @@ import type { DataState } from "../lib/types";
 interface LiveUpdatePillProps {
   dataState: DataState;
   updatedAt: string;
+  loading?: boolean;
 }
 
-export function LiveUpdatePill({ dataState, updatedAt }: LiveUpdatePillProps) {
+export function LiveUpdatePill({
+  dataState,
+  updatedAt,
+  loading = false,
+}: LiveUpdatePillProps) {
+  if (loading) {
+    return (
+      <span className="live-pill live-pill-loading">
+        <span className="live-dot" />
+        Checking live data…
+      </span>
+    );
+  }
+
   const label = dataState === "fallback" ? "Offline fallback" : "LIVE";
   return (
     <span className={`live-pill live-pill-${dataState}`}>
@@ -26,4 +40,3 @@ function formatUpdatedAt(value: string): string {
   if (diffMinutes < 60) return `${diffMinutes} min ago`;
   return `${Math.round(diffMinutes / 60)} hr ago`;
 }
-

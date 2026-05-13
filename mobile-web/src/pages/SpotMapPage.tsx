@@ -19,14 +19,31 @@ export function SpotMapPage() {
 
   const recommendation = occupancy ? getRecommendation(occupancy) : null;
   const routeSpot = searchParams.get("spot");
+  const routeSection = searchParams.get("section");
 
   useEffect(() => {
     if (!occupancy) return;
     const spotFromRoute = findSpot(occupancy, routeSpot);
-    const initialSection = spotFromRoute?.level ?? recommendation?.section.id ?? occupancy.sections[0]?.id;
+    // Match the `?section=` query param against either the section's
+    // canonical id (e.g. "Z1", "1") or its short label (e.g. "Z1", "L1"),
+    // case-insensitively, so deep links from the facility page's zone
+    // cards land on the right section.
+    const sectionQuery = routeSection?.trim().toUpperCase() ?? "";
+    const sectionFromQuery = sectionQuery
+      ? occupancy.sections.find(
+          (s) =>
+            s.id.toUpperCase() === sectionQuery ||
+            s.shortLabel.toUpperCase() === sectionQuery,
+        )
+      : undefined;
+    const initialSection =
+      sectionFromQuery?.id ??
+      spotFromRoute?.level ??
+      recommendation?.section.id ??
+      occupancy.sections[0]?.id;
     setSelectedSectionId((current) => current ?? initialSection ?? null);
     setSelectedSpot((current) => current ?? spotFromRoute ?? null);
-  }, [occupancy, recommendation, routeSpot]);
+  }, [occupancy, recommendation, routeSpot, routeSection]);
 
   const selectedSection = useMemo(() => {
     if (!occupancy) return undefined;
