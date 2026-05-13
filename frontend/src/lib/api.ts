@@ -357,10 +357,7 @@ function mockCapacityFromPayload(payload: BrightonMockZonesPayload): number {
   }
   if (isFiniteNumber(payload.capacity)) return Math.max(payload.capacity, 0);
   if (Array.isArray(payload.spots)) return payload.spots.length;
-  return BRIGHTON_MOCK_ZONES.reduce(
-    (total, zone) => total + zone.capacity,
-    0,
-  );
+  return BRIGHTON_MOCK_ZONES.reduce((total, zone) => total + zone.capacity, 0);
 }
 
 function normalizeBrightonOccupancy(
@@ -484,7 +481,10 @@ export function subscribeBrightonYoloSnapshots(
   function scheduleReconnect() {
     if (stopped || reconnectTimer !== null) return;
     reconnectAttempt += 1;
-    const delayMs = Math.min(1000 * 2 ** Math.min(reconnectAttempt - 1, 3), 10000);
+    const delayMs = Math.min(
+      1000 * 2 ** Math.min(reconnectAttempt - 1, 3),
+      10000,
+    );
     options.onStatusChange?.("reconnecting");
     reconnectTimer = window.setTimeout(() => {
       reconnectTimer = null;
@@ -522,7 +522,10 @@ export function subscribeBrightonYoloSnapshots(
         }
       } catch (err) {
         // eslint-disable-next-line no-console
-        console.warn("[SwiftPark] Ignoring malformed Brighton WebSocket frame", err);
+        console.warn(
+          "[SwiftPark] Ignoring malformed Brighton WebSocket frame",
+          err,
+        );
       }
     };
 

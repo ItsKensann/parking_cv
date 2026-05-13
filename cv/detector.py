@@ -119,12 +119,14 @@ class ParkingDetector:
         self._count_history.append(len(car_boxes))
         smoothed = int(round(sum(self._count_history) / len(self._count_history)))
 
-        # Occupancy percentage
-        occupancy_pct = min(smoothed / self.capacity, 1.0) if self.capacity > 0 else 0.0
 
-        car_boxes = self._split_merged_boxes(car_boxes)
         if self.spots:
             self._update_spot_occupancy(car_boxes)
+            # Occupancy based on spot states, not raw car count
+            occupied_count = sum(1 for s in self.spots if s.is_occupied)
+            occupancy_pct = occupied_count / len(self.spots)
+        else:
+            occupancy_pct = min(smoothed / self.capacity, 1.0) if self.capacity > 0 else 0.0
 
         # Draw annotations on frame
         annotated = self._draw_annotations(frame.copy(), car_boxes, smoothed, occupancy_pct)
@@ -216,30 +218,37 @@ class ParkingDetector:
 
         # Draw parking spot polygons (pro tier)
         for spot in self.spots:
-            color = (0, 0, 255) if spot.is_occupied else (0, 255, 0)  # red / green
+            color = (0, 0, 255) if spot.is_occupied else (0, 255, 0)
             cv2.polylines(frame, [spot.polygon], isClosed=True, color=color, thickness=2)
             cx = int(spot.polygon[:, 0].mean())
             cy = int(spot.polygon[:, 1].mean())
             cv2.putText(frame, spot.spot_id, (cx - 10, cy),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
-        # HUD overlay
-        occupied = smoothed_count
-        available = max(self.capacity - occupied, 0)
+        # HUD — derive from spot states if available, fall back to smoothed_count
+        if self.spots:
+            total     = len(self.spots)
+            occupied  = sum(1 for s in self.spots if s.is_occupied)
+            available = total - occupied
+            occupancy_pct = occupied / total if total > 0 else 0.0
+        else:
+            total     = self.capacity
+            occupied  = smoothed_count
+            available = max(self.capacity - smoothed_count, 0)
+
         pct_label = f"{occupancy_pct * 100:.0f}%"
 
-        # Color the HUD based on occupancy
         if occupancy_pct < 0.6:
-            hud_color = (0, 200, 0)    # green
+            hud_color = (0, 200, 0)
         elif occupancy_pct < 0.85:
-            hud_color = (0, 165, 255)  # orange
+            hud_color = (0, 165, 255)
         else:
-            hud_color = (0, 0, 255)    # red
+            hud_color = (0, 0, 255)
 
-        cv2.rectangle(frame, (10, 10), (300, 100), (0, 0, 0), -1)  # black background
-        cv2.putText(frame, f"Vehicles detected: {occupied}", (20, 35),
+        cv2.rectangle(frame, (10, 10), (300, 100), (0, 0, 0), -1)
+        cv2.putText(frame, f"Occupied:  {occupied}/{total}", (20, 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-        cv2.putText(frame, f"Available spots:   {available}/{self.capacity}", (20, 58),
+        cv2.putText(frame, f"Available: {available}/{total}", (20, 58),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
         cv2.putText(frame, f"Occupancy: {pct_label}", (20, 81),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, hud_color, 2)
