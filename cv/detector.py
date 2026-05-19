@@ -209,6 +209,8 @@ class ParkingDetector:
         vehicle_detections: list[VehicleDetection],
     ) -> float:
         best_score = 0.0
+        anchor_inside_spot = False
+        overlapping_detections = 0
         for detection in vehicle_detections:
             x1, y1, x2, y2 = detection.box
             confidence = detection.confidence
@@ -224,6 +226,7 @@ class ParkingDetector:
                 spot.polygon, (float(anchor_x), float(anchor_y)), False
             )
             if anchor_result >= 0:
+                anchor_inside_spot = True
                 if detection.is_split:
                     anchor_score = 0.55 + (0.30 * confidence)
                 else:
@@ -232,6 +235,7 @@ class ParkingDetector:
 
             overlap = self._spot_coverage_by_box(spot.polygon, detection.box)
             if overlap >= self.spot_overlap_threshold:
+                overlapping_detections += 1
                 overlap_scale = min(
                     (overlap - self.spot_overlap_threshold)
                     / max(1.0 - self.spot_overlap_threshold, 0.01),
@@ -250,6 +254,10 @@ class ParkingDetector:
                 else:
                     # Weak edge overlap usually means a neighboring car box bled over the stall line.
                     best_score = max(best_score, min(0.35, overlap_scale * confidence))
+
+        # Several neighboring boxes can cover an empty stall without any car owning it.
+        if not anchor_inside_spot and overlapping_detections >= 2:
+            return min(best_score, self.spot_occupied_score_threshold - 0.05)
 
         return min(max(best_score, 0.0), 1.0)
 
