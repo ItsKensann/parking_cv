@@ -23,6 +23,19 @@ class ParkingSpot:
     spot_id: str
     polygon: np.ndarray          # Shape: (N, 2) array of (x, y) points
     is_occupied: bool = False
+    status: str = "unknown"
+    confidence: float = 0.0
+    evidence_history: deque = field(default_factory=deque, repr=False)
+    _last_stable_status: str = "unknown"
+    _ambiguous_frames: int = 0
+
+
+@dataclass(frozen=True)
+class VehicleDetection:
+    """Vehicle box and detector confidence for a single frame."""
+    box: tuple[int, int, int, int]
+    confidence: float
+    is_split: bool = False
 
 
 @dataclass
@@ -31,6 +44,10 @@ class DetectionResult:
     frame: np.ndarray            # Annotated frame for display/streaming
     car_count: int               # Number of cars detected in the frame
     smoothed_count: int          # Smoothed count to reduce flickering
+    capacity: int                # Spot-map capacity if loaded, otherwise configured capacity
+    available_count: int         # Available spots from spot status or fallback count
+    occupied_count: int          # Occupied spots from spot status or fallback count
+    unknown_count: int           # Unknown spot statuses, only non-zero for mapped lots
     occupancy_pct: float         # 0.0 - 1.0, requires capacity to be set
     spots: list[ParkingSpot] = field(default_factory=list)  # Pro tier only
 
@@ -59,12 +76,30 @@ class ParkingDetector:
         confidence_threshold: float = 0.14,
         smoothing_window: int = 30,         # Frames to average for count smoothing
         iou_threshold: float = 0.15,        # Overlap needed to mark a spot occupied
+        spot_smoothing_window: int = 10,
+        spot_stable_frames: int = 3,
+        spot_occupied_frames: int = 4,
+        spot_hold_frames: int = 4,
+        spot_overlap_threshold: float = 0.36,
+        spot_strong_overlap_threshold: float = 0.55,
+        spot_overlap_high_confidence: float = 0.65,
+        spot_occupied_score_threshold: float = 0.72,
+        spot_clear_score_threshold: float = 0.15,
     ):
         print(f"Loading YOLO model: {model_path}")
         self.model = YOLO(model_path)
         self.capacity = capacity
         self.confidence_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
+        self.spot_smoothing_window = spot_smoothing_window
+        self.spot_stable_frames = spot_stable_frames
+        self.spot_occupied_frames = spot_occupied_frames
+        self.spot_hold_frames = spot_hold_frames
+        self.spot_overlap_threshold = spot_overlap_threshold
+        self.spot_strong_overlap_threshold = spot_strong_overlap_threshold
+        self.spot_overlap_high_confidence = spot_overlap_high_confidence
+        self.spot_occupied_score_threshold = spot_occupied_score_threshold
+        self.spot_clear_score_threshold = spot_clear_score_threshold
 
         # Rolling window for count smoothing (prevents flickering)
         self._count_history: deque = deque(maxlen=smoothing_window)
@@ -84,7 +119,8 @@ class ParkingDetector:
         self.spots = [
             ParkingSpot(
                 spot_id=s["id"],
-                polygon=np.array(s["polygon"], dtype=np.int32)
+                polygon=np.array(s["polygon"], dtype=np.int32),
+                evidence_history=deque(maxlen=self.spot_smoothing_window),
             )
             for s in spots_config
         ]
@@ -107,71 +143,225 @@ class ParkingDetector:
         results = self.model(frame, verbose=False, imgsz=1280)[0]
 
         # Filter to vehicle classes above confidence threshold
-        car_boxes = []
+        vehicle_detections: list[VehicleDetection] = []
         for box in results.boxes:
             cls = int(box.cls[0])
             conf = float(box.conf[0])
             if cls in VEHICLE_CLASSES and conf >= self.confidence_threshold:
                 x1, y1, x2, y2 = map(int, box.xyxy[0])
-                car_boxes.append((x1, y1, x2, y2))
+                vehicle_detections.append(VehicleDetection((x1, y1, x2, y2), conf))
 
         # Smooth the count
-        self._count_history.append(len(car_boxes))
+        self._count_history.append(len(vehicle_detections))
         smoothed = int(round(sum(self._count_history) / len(self._count_history)))
 
-        # Occupancy percentage
-        occupancy_pct = min(smoothed / self.capacity, 1.0) if self.capacity > 0 else 0.0
-
-        car_boxes = self._split_merged_boxes(car_boxes)
+        vehicle_detections = self._split_merged_boxes(vehicle_detections)
         if self.spots:
-            self._update_spot_occupancy(car_boxes)
+            self._update_spot_occupancy(vehicle_detections)
+            capacity, available_count, occupied_count, unknown_count = self._spot_stats()
+        else:
+            capacity = self.capacity
+            occupied_count = min(smoothed, capacity) if capacity > 0 else 0
+            available_count = max(capacity - occupied_count, 0)
+            unknown_count = 0
+
+        occupancy_pct = (
+            min(occupied_count / capacity, 1.0)
+            if capacity > 0
+            else 0.0
+        )
 
         # Draw annotations on frame
-        annotated = self._draw_annotations(frame.copy(), car_boxes, smoothed, occupancy_pct)
+        car_boxes = [detection.box for detection in vehicle_detections]
+        annotated = self._draw_annotations(
+            frame.copy(),
+            car_boxes,
+            smoothed,
+            capacity,
+            available_count,
+            occupied_count,
+            unknown_count,
+            occupancy_pct,
+        )
 
         return DetectionResult(
             frame=annotated,
-            car_count=len(car_boxes),
+            car_count=len(vehicle_detections),
             smoothed_count=smoothed,
+            capacity=capacity,
+            available_count=available_count,
+            occupied_count=occupied_count,
+            unknown_count=unknown_count,
             occupancy_pct=occupancy_pct,
             spots=list(self.spots),
         )
 
     # ------------------------------------------------------------------
-    # Spot occupancy check via IoU
+    # Spot occupancy check via anchor point, polygon overlap, and smoothing
     # ------------------------------------------------------------------
 
     # helper function for the case that two boxes get merged
-    def _split_merged_boxes(self, car_boxes: list[tuple], width_ratio: float = 1.8) -> list[tuple]:
+    def _split_merged_boxes(
+        self,
+        vehicle_detections: list[VehicleDetection],
+        width_ratio: float = 1.8,
+    ) -> list[VehicleDetection]:
         """
         Splits bounding boxes that are suspiciously wide into two equal halves.
         These are likely two cars that YOLO merged into one detection.
         """
         result = []
-        for (x1, y1, x2, y2) in car_boxes:
+        for detection in vehicle_detections:
+            x1, y1, x2, y2 = detection.box
             w = x2 - x1
             h = y2 - y1
             if h > 0 and (w / h) > width_ratio:
                 mid = (x1 + x2) // 2
-                result.append((x1, y1, mid, y2))  # left half
-                result.append((mid, y1, x2, y2))  # right half
+                split_confidence = detection.confidence * 0.75
+                result.append(VehicleDetection((x1, y1, mid, y2), split_confidence, True))
+                result.append(VehicleDetection((mid, y1, x2, y2), split_confidence, True))
             else:
-                result.append((x1, y1, x2, y2))
+                result.append(detection)
         return result
 
-    # Instead of IoU, use center point containment
-    def _update_spot_occupancy(self, car_boxes):
+    def _update_spot_occupancy(self, vehicle_detections: list[VehicleDetection]):
         for spot in self.spots:
-            spot.is_occupied = False
-            for (x1, y1, x2, y2) in car_boxes:
-                center_x = (x1 + x2) // 2
-                center_y = int(y1 + (y2 - y1) * 0.85)
-                result = cv2.pointPolygonTest(
-                    spot.polygon, (float(center_x), float(center_y)), False
+            evidence_score = self._score_spot_occupancy(spot, vehicle_detections)
+            self._apply_spot_smoothing(spot, evidence_score)
+
+    def _spot_stats(self) -> tuple[int, int, int, int]:
+        capacity = len(self.spots)
+        available = sum(1 for spot in self.spots if spot.status == "available")
+        occupied = sum(1 for spot in self.spots if spot.status == "occupied")
+        unknown = max(capacity - available - occupied, 0)
+        return capacity, available, occupied, unknown
+
+    def _score_spot_occupancy(
+        self,
+        spot: ParkingSpot,
+        vehicle_detections: list[VehicleDetection],
+    ) -> float:
+        best_score = 0.0
+        anchor_inside_spot = False
+        overlapping_detections = 0
+        for detection in vehicle_detections:
+            x1, y1, x2, y2 = detection.box
+            confidence = detection.confidence
+            spot_center_x = float(spot.polygon[:, 0].mean())
+            spot_center_y = float(spot.polygon[:, 1].mean())
+            box_contains_spot_center = (
+                x1 <= spot_center_x <= x2 and y1 <= spot_center_y <= y2
+            )
+
+            anchor_x = (x1 + x2) // 2
+            anchor_y = int(y1 + (y2 - y1) * 0.85)
+            anchor_result = cv2.pointPolygonTest(
+                spot.polygon, (float(anchor_x), float(anchor_y)), False
+            )
+            if anchor_result >= 0:
+                anchor_inside_spot = True
+                if detection.is_split:
+                    anchor_score = 0.55 + (0.30 * confidence)
+                else:
+                    anchor_score = 0.62 + (0.35 * confidence)
+                best_score = max(best_score, anchor_score)
+
+            overlap = self._spot_coverage_by_box(spot.polygon, detection.box)
+            if overlap >= self.spot_overlap_threshold:
+                overlapping_detections += 1
+                overlap_scale = min(
+                    (overlap - self.spot_overlap_threshold)
+                    / max(1.0 - self.spot_overlap_threshold, 0.01),
+                    1.0,
                 )
-                if result >= 0:
-                    spot.is_occupied = True
-                    break
+                strong_overlap = overlap >= self.spot_strong_overlap_threshold
+                high_confidence = confidence >= self.spot_overlap_high_confidence
+
+                if box_contains_spot_center or (strong_overlap and high_confidence):
+                    overlap_score = 0.50 + (0.30 * overlap_scale) + (0.20 * confidence)
+                    if not box_contains_spot_center:
+                        overlap_score -= 0.14
+                    if detection.is_split:
+                        overlap_score -= 0.10
+                    best_score = max(best_score, overlap_score)
+                else:
+                    # Weak edge overlap usually means a neighboring car box bled over the stall line.
+                    best_score = max(best_score, min(0.35, overlap_scale * confidence))
+
+        # Several neighboring boxes can cover an empty stall without any car owning it.
+        if not anchor_inside_spot and overlapping_detections >= 2:
+            return min(best_score, self.spot_occupied_score_threshold - 0.05)
+
+        return min(max(best_score, 0.0), 1.0)
+
+    def _apply_spot_smoothing(self, spot: ParkingSpot, evidence_score: float):
+        spot.evidence_history.append(evidence_score)
+        evidence = list(spot.evidence_history)
+        available_recent = evidence[-self.spot_stable_frames:]
+        occupied_recent = evidence[-self.spot_occupied_frames:]
+
+        if len(available_recent) < self.spot_stable_frames:
+            self._set_spot_status(spot, "unknown", 0.0)
+            return
+
+        if (
+            len(occupied_recent) >= self.spot_occupied_frames
+            and all(score >= self.spot_occupied_score_threshold for score in occupied_recent)
+        ):
+            confidence = sum(occupied_recent) / len(occupied_recent)
+            self._set_spot_status(spot, "occupied", confidence, stable=True)
+            return
+
+        if all(score <= self.spot_clear_score_threshold for score in available_recent):
+            confidence = sum(1.0 - score for score in available_recent) / len(available_recent)
+            self._set_spot_status(spot, "available", confidence, stable=True)
+            return
+
+        spot._ambiguous_frames += 1
+        if spot._last_stable_status != "unknown" and spot._ambiguous_frames <= self.spot_hold_frames:
+            decayed_confidence = max(0.35, spot.confidence * 0.85)
+            self._set_spot_status(spot, spot._last_stable_status, decayed_confidence)
+            return
+
+        self._set_spot_status(spot, "unknown", 0.0)
+
+    @staticmethod
+    def _set_spot_status(
+        spot: ParkingSpot,
+        status: str,
+        confidence: float,
+        stable: bool = False,
+    ):
+        spot.status = status
+        spot.is_occupied = status == "occupied"
+        spot.confidence = round(min(max(confidence, 0.0), 1.0), 3)
+        if stable:
+            spot._last_stable_status = status
+            spot._ambiguous_frames = 0
+
+    @staticmethod
+    def _spot_coverage_by_box(polygon: np.ndarray, box: tuple[int, int, int, int]) -> float:
+        x1, y1, x2, y2 = box
+        if x2 <= x1 or y2 <= y1:
+            return 0.0
+
+        poly_x, poly_y, poly_w, poly_h = cv2.boundingRect(polygon)
+        roi_x1 = max(x1, poly_x)
+        roi_y1 = max(y1, poly_y)
+        roi_x2 = min(x2, poly_x + poly_w)
+        roi_y2 = min(y2, poly_y + poly_h)
+        if roi_x2 <= roi_x1 or roi_y2 <= roi_y1:
+            return 0.0
+
+        width = roi_x2 - roi_x1
+        height = roi_y2 - roi_y1
+        shifted_polygon = polygon - np.array([roi_x1, roi_y1], dtype=np.int32)
+        mask = np.zeros((height, width), dtype=np.uint8)
+        cv2.fillPoly(mask, [shifted_polygon], 255)
+
+        intersection_area = float(cv2.countNonZero(mask))
+        spot_area = max(float(cv2.contourArea(polygon)), 1.0)
+        return min(intersection_area / spot_area, 1.0)
 
     @staticmethod
     def _compute_iou(box_a: tuple, box_b: tuple) -> float:
@@ -206,6 +396,10 @@ class ParkingDetector:
         frame: np.ndarray,
         car_boxes: list[tuple],
         smoothed_count: int,
+        capacity: int,
+        available_count: int,
+        occupied_count: int,
+        unknown_count: int,
         occupancy_pct: float,
     ) -> np.ndarray:
         """Draw bounding boxes, spot overlays, and HUD onto the frame."""
@@ -216,7 +410,12 @@ class ParkingDetector:
 
         # Draw parking spot polygons (pro tier)
         for spot in self.spots:
-            color = (0, 0, 255) if spot.is_occupied else (0, 255, 0)  # red / green
+            if spot.status == "occupied":
+                color = (0, 0, 255)      # red
+            elif spot.status == "unknown":
+                color = (0, 255, 255)    # yellow
+            else:
+                color = (0, 255, 0)      # green
             cv2.polylines(frame, [spot.polygon], isClosed=True, color=color, thickness=2)
             cx = int(spot.polygon[:, 0].mean())
             cy = int(spot.polygon[:, 1].mean())
@@ -224,8 +423,6 @@ class ParkingDetector:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
         # HUD overlay
-        occupied = smoothed_count
-        available = max(self.capacity - occupied, 0)
         pct_label = f"{occupancy_pct * 100:.0f}%"
 
         # Color the HUD based on occupancy
@@ -236,12 +433,16 @@ class ParkingDetector:
         else:
             hud_color = (0, 0, 255)    # red
 
-        cv2.rectangle(frame, (10, 10), (300, 100), (0, 0, 0), -1)  # black background
-        cv2.putText(frame, f"Vehicles detected: {occupied}", (20, 35),
+        cv2.rectangle(frame, (10, 10), (330, 135), (0, 0, 0), -1)  # black background
+        cv2.putText(frame, f"Occupied:  {occupied_count}/{capacity}", (20, 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-        cv2.putText(frame, f"Available spots:   {available}/{self.capacity}", (20, 58),
+        cv2.putText(frame, f"Available: {available_count}/{capacity}", (20, 58),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-        cv2.putText(frame, f"Occupancy: {pct_label}", (20, 81),
+        cv2.putText(frame, f"Unknown:   {unknown_count}/{capacity}", (20, 81),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        cv2.putText(frame, f"Occupancy: {pct_label}", (20, 104),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, hud_color, 2)
+        cv2.putText(frame, f"Vehicles detected: {smoothed_count}", (20, 124),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
 
         return frame
