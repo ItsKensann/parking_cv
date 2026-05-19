@@ -1,69 +1,39 @@
-## Phase 5: Brighton Ski Resort + YOLO Integration
+# SwiftPark Agent Operating Rules
 
-We are starting Phase 5.
+## Authority
+- Agents may create branches, issues, worktrees, pull requests, test reports, and draft messages.
+- Agents may not merge to main without explicit human approval.
+- Agents may not deploy production without explicit human approval.
+- Agents may not send client emails without explicit human approval.
+- Agents may not submit or edit YC application materials without explicit human approval.
+- Agents may not update visual snapshot baselines without explicit human approval.
 
-Goal:
-Add a second facility called Brighton Ski Resort while preserving the completed OSU Parking Structure 1 flow.
+## Workflow
+Every feature must use:
+1. GitHub Issue
+2. Branch or worktree
+3. Pull Request
+4. QA report
+5. Visual screenshots in Discord
+6. Human approval before merge/deploy
 
-Current completed OSU flow:
-Splash → Home → Garage Overview → Spot Visualization / Navigation → Parked Confirmation
+## Agent Roles
+- PM Agent: clarify goal, write implementation brief, define acceptance criteria.
+- Backend Agent: API, database, auth, server behavior, migrations.
+- Frontend Agent: UI, visual polish, layout, responsive behavior.
+- QA Agent: independent testing, Playwright, screenshots, regression checks.
+- Ops Agent: drafts only for email, YC, Reddit, CRM, and client updates.
 
-Brighton requirements:
-- Brighton Ski Resort is a surface parking lot, not a parking garage.
-- Brighton has 3 zones.
-- Zone 1 should use YOLO/video-derived occupancy data from the new backend.
-- Zones 2 and 3 should use mock data for now.
-- Brighton should eventually use a surface-lot visualization, not ParkingGarage3D.
-- OSU should continue using the existing ParkingGarage3D garage visualization.
+## Visual QA
+- Every feature must run visual tests before approval.
+- Screenshots must be posted to Discord.
+- Mobile and desktop views must both be checked.
+- Do not hide, ignore, or delete failing screenshots.
+- Do not update baselines unless the human explicitly approves the visual change.
 
-Important backend context:
-- Existing OSU demo API uses `/demo/occupancy` and `/demo/simulate-detection`.
-- New YOLO/camera backend exposes `/status` and `/ws`.
-- The new backend models mostly match the frontend Occupancy and Spot shapes.
-- The API endpoints are different, so `frontend/src/lib/api.ts` needs to become facility-aware.
-
-Implementation direction:
-- Start with frontend facility-aware API/cache plumbing.
-- Do not merge or rewrite backend apps in the first step.
-- Use REST `/status` first for Brighton Zone 1.
-- Do not add WebSocket integration yet.
-- Keep OSU behavior unchanged.
-- Cache occupancy by facility slug, not one global cache.
-- Keep `Spot.level` as the grouping field.
-- For OSU, display `level` as Level.
-- For Brighton, display `level` as Zone.
-
-Recommended first implementation:
-1. Add facility metadata.
-2. Update API functions to accept a facility slug.
-3. Update occupancy cache to cache by facility slug.
-4. Add Brighton normalizer that combines:
-   - Zone 1 from YOLO `/status`
-   - Zone 2 mock data
-   - Zone 3 mock data
-5. Keep existing OSU UI/flow unchanged during the foundation step.
-
-Do not touch unless explicitly asked:
-- `ParkingGarage3D`
-- `carModelLoader`
-- `cv/detector.py`
-- `run.py`
-- `calibrate.py`
-- backend camera loop
-- Supabase secrets
-- `.env`
-
-Do not add:
-- real maps
-- real GPS
-- auth
-- payments
-- cloud deployment
-- `@base44/sdk`
-
-Validation:
-- Ensure existing OSU flow still works.
-- Run frontend typecheck/build:
-  - `cd frontend`
-  - `npx tsc -b`
-  - `npx vite build`
+## Safety
+- Never print secrets, tokens, cookies, or private keys.
+- Never commit .env files.
+- Never bypass branch protections.
+- Never use --yolo / dangerous approval bypasses outside a fully isolated sandbox.
+- Ask for approval before touching billing, auth, production data, email sending, YC, or deployment.
