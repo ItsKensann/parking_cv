@@ -44,6 +44,10 @@ class DetectionResult:
     frame: np.ndarray            # Annotated frame for display/streaming
     car_count: int               # Number of cars detected in the frame
     smoothed_count: int          # Smoothed count to reduce flickering
+    capacity: int                # Spot-map capacity if loaded, otherwise configured capacity
+    available_count: int         # Available spots from spot status or fallback count
+    occupied_count: int          # Occupied spots from spot status or fallback count
+    unknown_count: int           # Unknown spot statuses, only non-zero for mapped lots
     occupancy_pct: float         # 0.0 - 1.0, requires capacity to be set
     spots: list[ParkingSpot] = field(default_factory=list)  # Pro tier only
 
@@ -151,21 +155,43 @@ class ParkingDetector:
         self._count_history.append(len(vehicle_detections))
         smoothed = int(round(sum(self._count_history) / len(self._count_history)))
 
-        # Occupancy percentage
-        occupancy_pct = min(smoothed / self.capacity, 1.0) if self.capacity > 0 else 0.0
-
         vehicle_detections = self._split_merged_boxes(vehicle_detections)
         if self.spots:
             self._update_spot_occupancy(vehicle_detections)
+            capacity, available_count, occupied_count, unknown_count = self._spot_stats()
+        else:
+            capacity = self.capacity
+            occupied_count = min(smoothed, capacity) if capacity > 0 else 0
+            available_count = max(capacity - occupied_count, 0)
+            unknown_count = 0
+
+        occupancy_pct = (
+            min(occupied_count / capacity, 1.0)
+            if capacity > 0
+            else 0.0
+        )
 
         # Draw annotations on frame
         car_boxes = [detection.box for detection in vehicle_detections]
-        annotated = self._draw_annotations(frame.copy(), car_boxes, smoothed, occupancy_pct)
+        annotated = self._draw_annotations(
+            frame.copy(),
+            car_boxes,
+            smoothed,
+            capacity,
+            available_count,
+            occupied_count,
+            unknown_count,
+            occupancy_pct,
+        )
 
         return DetectionResult(
             frame=annotated,
             car_count=len(vehicle_detections),
             smoothed_count=smoothed,
+            capacity=capacity,
+            available_count=available_count,
+            occupied_count=occupied_count,
+            unknown_count=unknown_count,
             occupancy_pct=occupancy_pct,
             spots=list(self.spots),
         )
@@ -202,6 +228,13 @@ class ParkingDetector:
         for spot in self.spots:
             evidence_score = self._score_spot_occupancy(spot, vehicle_detections)
             self._apply_spot_smoothing(spot, evidence_score)
+
+    def _spot_stats(self) -> tuple[int, int, int, int]:
+        capacity = len(self.spots)
+        available = sum(1 for spot in self.spots if spot.status == "available")
+        occupied = sum(1 for spot in self.spots if spot.status == "occupied")
+        unknown = max(capacity - available - occupied, 0)
+        return capacity, available, occupied, unknown
 
     def _score_spot_occupancy(
         self,
@@ -363,6 +396,10 @@ class ParkingDetector:
         frame: np.ndarray,
         car_boxes: list[tuple],
         smoothed_count: int,
+        capacity: int,
+        available_count: int,
+        occupied_count: int,
+        unknown_count: int,
         occupancy_pct: float,
     ) -> np.ndarray:
         """Draw bounding boxes, spot overlays, and HUD onto the frame."""
@@ -386,8 +423,6 @@ class ParkingDetector:
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1)
 
         # HUD overlay
-        occupied = smoothed_count
-        available = max(self.capacity - occupied, 0)
         pct_label = f"{occupancy_pct * 100:.0f}%"
 
         # Color the HUD based on occupancy
@@ -398,12 +433,16 @@ class ParkingDetector:
         else:
             hud_color = (0, 0, 255)    # red
 
-        cv2.rectangle(frame, (10, 10), (300, 100), (0, 0, 0), -1)  # black background
-        cv2.putText(frame, f"Vehicles detected: {occupied}", (20, 35),
+        cv2.rectangle(frame, (10, 10), (330, 135), (0, 0, 0), -1)  # black background
+        cv2.putText(frame, f"Occupied:  {occupied_count}/{capacity}", (20, 35),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-        cv2.putText(frame, f"Available spots:   {available}/{self.capacity}", (20, 58),
+        cv2.putText(frame, f"Available: {available_count}/{capacity}", (20, 58),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
-        cv2.putText(frame, f"Occupancy: {pct_label}", (20, 81),
+        cv2.putText(frame, f"Unknown:   {unknown_count}/{capacity}", (20, 81),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1)
+        cv2.putText(frame, f"Occupancy: {pct_label}", (20, 104),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, hud_color, 2)
+        cv2.putText(frame, f"Vehicles detected: {smoothed_count}", (20, 124),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1)
 
         return frame

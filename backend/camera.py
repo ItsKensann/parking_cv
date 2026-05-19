@@ -141,10 +141,10 @@ class CameraWorker:
                     location="123 Main St",
                     facility_status=compute_facility_status(result.occupancy_pct),
                     timestamp=datetime.now(timezone.utc),
-                    capacity=self.capacity,
-                    available=max(self.capacity - result.smoothed_count, 0),
-                    occupied=result.smoothed_count,
-                    unknown=0,
+                    capacity=result.capacity,
+                    available=result.available_count,
+                    occupied=result.occupied_count,
+                    unknown=result.unknown_count,
                     occupancy_pct=round(result.occupancy_pct, 3),
                     spots=[
                         SpotStatus(
