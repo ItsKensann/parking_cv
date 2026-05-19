@@ -151,8 +151,12 @@ class CameraWorker:
                             id=s.spot_id,
                             label=s.spot_id,
                             level="1",
-                            status="occupied" if s.is_occupied else "available",
-                            confidence=1.0,
+                            status=getattr(
+                                s,
+                                "status",
+                                "occupied" if s.is_occupied else "available",
+                            ),
+                            confidence=getattr(s, "confidence", 1.0),
                         )
                         for s in result.spots
                     ],
